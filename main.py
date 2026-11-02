@@ -1,7 +1,7 @@
 from fastapi import FastAPI,HTTPException,Depends,Header
 import secrets
 from pwdlib import PasswordHash
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 from fastapi.security import HTTPBearer
 
 app = FastAPI()
@@ -196,21 +196,36 @@ User_id = 0
 id_with_reservations= {}
 
 class confidential(BaseModel):
-    username : str
-    password : str
+    username : str = Field(description='length must be at least 3 characters')
+    password : str = Field(description='length must be at least 8 characters')
+
+class guest_data(BaseModel):
+    username: str = Field(description='length must be at least 3 characters')
+    password: str = Field(description='length must be at least 8 characters')
+    reservation_number: int | None = None
+    confirm_code: str | None = None
+
+
 
 @app.post('/main_page/sign_up')
-def client_credentials(user_data: confidential,reservation_number:int|None=None,confirm_code:str|None=None):
+def client_credentials(user_data: guest_data):
     global credentials
     global User_id
     global id_with_reservations
+    reservation_number = user_data.reservation_number
+    confirm_code = user_data.confirm_code
     message = 'No guest reservations'
 
 
-    if user_data.username.strip() == '' or user_data.username.strip().isdigit() :
+    if (user_data.username.strip() == '' or user_data.username.strip().isdigit()
+    or user_data.username.strip() == 'string') :
         raise HTTPException(status_code=400, detail='Invalid Username')
-    elif user_data.password.strip() == '':
+    elif len(user_data.username.strip()) <3 :
+        raise HTTPException(status_code=400, detail='Username must contain 3 or more characters')
+    if user_data.password.strip() == '' or user_data.password.strip() == 'string':
         raise HTTPException(status_code=400, detail='Invalid Password')
+    elif len(user_data.password.strip()) < 8 :
+        raise HTTPException(status_code=400, detail='Password must contain 8 or more characters')
 
     hasher = PasswordHash.recommended()
 
@@ -225,10 +240,10 @@ def client_credentials(user_data: confidential,reservation_number:int|None=None,
          message = 'Incomplete reservation details'
 
 
-    if user_data.username not in credentials.keys():
-        credentials[user_data.username] = [hasher.hash(user_data.password)]
+    if user_data.username.strip() not in credentials.keys():
+        credentials[user_data.username.strip()] = [hasher.hash(user_data.password)]
         User_id += 1
-        credentials[user_data.username].append(User_id)
+        credentials[user_data.username.strip()].append(User_id)
 
         if reservation_valid:
             if any(reservation_number in item for item in id_with_reservations.values()):
@@ -253,18 +268,39 @@ confirm_codes_login = []
 def client_login(user_data: confidential):
     hasher = PasswordHash.recommended()
 
-    if user_data.username not in credentials.keys():
+    if user_data.username.strip() not in credentials.keys():
         raise HTTPException(status_code=401, detail='Invalid credentials')
 
-    check = hasher.verify(user_data.password,credentials[user_data.username][0])
+    check = hasher.verify(user_data.password,credentials[user_data.username.strip()][0])
     if check == True:
         code_after_login = secrets.token_urlsafe(32)
-        confirm_codes_login.append((code_after_login,credentials[user_data.username][1]))
-        return {'Username': user_data.username,
+        confirm_codes_login.append((code_after_login,credentials[user_data.username.strip()][1]))
+        return {'Username': user_data.username.strip(),
                 'Code after login': code_after_login,
                 'Login': f'{user_data.username} successsfully logged in'}
     else:
         raise HTTPException(status_code=401, detail='Invalid credentials')
+
+
+
+class reservation_confirm_only(BaseModel):
+    reservation_number : int
+    confirm_code : str
+
+@app.post('/main_page/client')
+def add_reservations(user_data : reservation_confirm_only,check=Depends(check_credentials)):
+    reservation_number = user_data.reservation_number
+    confirm_code = user_data.confirm_code
+
+
+    for item in id_with_confirm_code:
+        if {reservation_number: confirm_code} == item:
+            if any(reservation_number in item for item in id_with_reservations.values()):
+                raise HTTPException(status_code=409, detail='The reservation has already been added')
+            id_with_reservations[check]= id_with_reservations.get(check,[]) + [reservation_number]
+            return 'Reservation added to your account'
+    raise HTTPException(status_code=404, detail= 'Reservation not found')
+
 
 
 
